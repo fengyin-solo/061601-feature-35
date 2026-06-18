@@ -66,6 +66,7 @@ export const useSaveStore = defineStore('save', () => {
   function deserializeGameState(data: string): boolean {
     try {
       const state = JSON.parse(data)
+      gameStore.resetEventFlowState()
       gameStore.day = state.day
       gameStore.timeSlot = state.timeSlot
       gameStore.actionsRemaining = state.actionsRemaining

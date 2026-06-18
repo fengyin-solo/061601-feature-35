@@ -1,28 +1,36 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed } from 'vue'
+import { storeToRefs } from 'pinia'
 import { useGameStore } from '../stores/gameStore'
 import gameConfig from '../config/gameConfig'
 import { getRarityColor, getRarityLabel } from '../utils/gameUtils'
 
 const gameStore = useGameStore()
 
-const event = computed(() => gameStore.currentEvent)
-const response = computed(() => gameStore.currentResponse)
-const result = computed(() => gameStore.eventResult)
+const {
+  showEventModal,
+  currentEvent,
+  currentResponse,
+  eventResult,
+  showResponse,
+  showResult,
+  isEventFlowActive,
+  eventFlowPhase
+} = storeToRefs(gameStore)
 
 const characterConfig = computed(() => {
-  if (!event.value?.characterId) return null
-  return gameConfig.characters.find(c => c.id === event.value!.characterId)
+  if (!currentEvent.value?.characterId) return null
+  return gameConfig.characters.find(c => c.id === currentEvent.value!.characterId)
 })
 
 const responseCharacterConfig = computed(() => {
-  if (!response.value?.characterId) return null
-  return gameConfig.characters.find(c => c.id === response.value!.characterId)
+  if (!currentResponse.value?.characterId) return null
+  return gameConfig.characters.find(c => c.id === currentResponse.value!.characterId)
 })
 
 const sceneBackground = computed(() => {
-  const style = event.value?.narrationStyle
-  const scene = event.value?.backgroundScene
+  const style = currentEvent.value?.narrationStyle
+  const scene = currentEvent.value?.backgroundScene
   const backgrounds: Record<string, string> = {
     library: 'linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)',
     cafe: 'linear-gradient(135deg, #fed7aa 0%, #fdba74 100%)',
@@ -36,7 +44,7 @@ const sceneBackground = computed(() => {
 })
 
 const emotionIcon = computed(() => {
-  const emotion = response.value?.emotion
+  const emotion = currentResponse.value?.emotion
   const icons: Record<string, string> = {
     happy: '😊',
     sad: '😢',
@@ -49,7 +57,7 @@ const emotionIcon = computed(() => {
 })
 
 const emotionLabel = computed(() => {
-  const emotion = response.value?.emotion
+  const emotion = currentResponse.value?.emotion
   const labels: Record<string, string> = {
     happy: '开心',
     sad: '难过',
@@ -62,12 +70,13 @@ const emotionLabel = computed(() => {
 })
 
 const styleClass = computed(() => {
-  const style = event.value?.narrationStyle || 'normal'
+  const style = currentEvent.value?.narrationStyle || 'normal'
   return `narration-${style}`
 })
 
 function handleChoice(choiceId: string) {
-  const choice = event.value?.choices.find(c => c.id === choiceId)
+  if (eventFlowPhase.value !== 'choosing') return
+  const choice = currentEvent.value?.choices.find(c => c.id === choiceId)
   if (choice) {
     gameStore.handleEventChoice(choice)
   }
@@ -88,71 +97,73 @@ function formatEffect(effect: any): string {
   }
   return result
 }
+
+const showChoosing = computed(() => !showResponse.value && !showResult.value)
 </script>
 
 <template>
   <Teleport to="body">
-    <div v-if="gameStore.showEventModal" class="modal-overlay" @click.self="">
+    <div v-if="isEventFlowActive" class="modal-overlay">
       <div class="modal-content event-modal" :class="styleClass">
         <div class="scene-background" :style="{ background: sceneBackground }"></div>
         
         <div class="event-content">
-          <div v-if="!gameStore.showResponse && !gameStore.showResult" class="event-main">
-            <div class="event-header">
-              <div v-if="characterConfig" class="event-character">
-                <div class="char-avatar-large">
-                  <span class="char-avatar-img">{{ characterConfig.avatar }}</span>
-                  <div class="char-avatar-glow"></div>
+          <Transition name="fade" mode="out-in">
+            <div v-if="showChoosing && currentEvent" key="choosing" class="event-main">
+              <div class="event-header">
+                <div v-if="characterConfig" class="event-character">
+                  <div class="char-avatar-large">
+                    <span class="char-avatar-img">{{ characterConfig.avatar }}</span>
+                    <div class="char-avatar-glow"></div>
+                  </div>
+                  <div class="char-info">
+                    <span class="char-name-large">{{ characterConfig.name }}</span>
+                    <span class="char-personality">{{ characterConfig.personality }}</span>
+                  </div>
                 </div>
-                <div class="char-info">
-                  <span class="char-name-large">{{ characterConfig.name }}</span>
-                  <span class="char-personality">{{ characterConfig.personality }}</span>
-                </div>
+                <span class="event-tag" :class="styleClass">{{ currentEvent.narrationStyle === 'romantic' ? '浪漫' : currentEvent.narrationStyle === 'dramatic' ? '剧情' : currentEvent.narrationStyle === 'mysterious' ? '神秘' : '事件' }}</span>
               </div>
-              <span class="event-tag" :class="styleClass">{{ event?.narrationStyle === 'romantic' ? '浪漫' : event?.narrationStyle === 'dramatic' ? '剧情' : event?.narrationStyle === 'mysterious' ? '神秘' : '事件' }}</span>
+
+              <h2 class="event-title">{{ currentEvent.title }}</h2>
+              
+              <div class="event-description-box">
+                <p class="event-description">{{ currentEvent.description }}</p>
+              </div>
+
+              <div class="event-choices">
+                <button
+                  v-for="choice in currentEvent.choices"
+                  :key="choice.id"
+                  class="choice-btn"
+                  @click="handleChoice(choice.id)"
+                >
+                  <span class="choice-text">{{ choice.text }}</span>
+                  <div class="choice-effects">
+                    <span 
+                      v-for="(effect, idx) in choice.effects" 
+                      :key="idx"
+                      class="effect-tag"
+                      :class="{ positive: effect.affinityChange > 0 || effect.moodChange > 0, negative: effect.affinityChange < 0 || effect.moodChange < 0 }"
+                    >
+                      {{ formatEffect(effect) }}
+                    </span>
+                    <span v-if="choice.resourceChange" class="effect-tag" :class="{ positive: choice.resourceChange > 0, negative: choice.resourceChange < 0 }">
+                      代币 {{ choice.resourceChange > 0 ? '+' : '' }}{{ choice.resourceChange }}
+                    </span>
+                    <span v-if="choice.unlockCharacterId" class="effect-tag special">
+                      ✨ 解锁角色
+                    </span>
+                    <span v-if="choice.addCardId" class="effect-tag special">
+                      🎴 获得卡牌
+                    </span>
+                  </div>
+                </button>
+              </div>
             </div>
 
-            <h2 class="event-title">{{ event?.title }}</h2>
-            
-            <div class="event-description-box">
-              <p class="event-description">{{ event?.description }}</p>
-            </div>
-
-            <div class="event-choices">
-              <button
-                v-for="choice in event?.choices"
-                :key="choice.id"
-                class="choice-btn"
-                @click="handleChoice(choice.id)"
-              >
-                <span class="choice-text">{{ choice.text }}</span>
-                <div class="choice-effects">
-                  <span 
-                    v-for="(effect, idx) in choice.effects" 
-                    :key="idx"
-                    class="effect-tag"
-                    :class="{ positive: effect.affinityChange > 0 || effect.moodChange > 0, negative: effect.affinityChange < 0 || effect.moodChange < 0 }"
-                  >
-                    {{ formatEffect(effect) }}
-                  </span>
-                  <span v-if="choice.resourceChange" class="effect-tag" :class="{ positive: choice.resourceChange > 0, negative: choice.resourceChange < 0 }">
-                    代币 {{ choice.resourceChange > 0 ? '+' : '' }}{{ choice.resourceChange }}
-                  </span>
-                  <span v-if="choice.unlockCharacterId" class="effect-tag special">
-                    ✨ 解锁角色
-                  </span>
-                  <span v-if="choice.addCardId" class="effect-tag special">
-                    🎴 获得卡牌
-                  </span>
-                </div>
-              </button>
-            </div>
-          </div>
-
-          <Transition name="response">
-            <div v-if="gameStore.showResponse && response" class="response-section">
+            <div v-else-if="showResponse && currentResponse" key="response" class="response-section">
               <div class="response-character">
-                <div class="response-avatar" :class="response?.emotion">
+                <div class="response-avatar" :class="currentResponse.emotion">
                   <span class="response-avatar-img">{{ responseCharacterConfig?.avatar }}</span>
                   <div class="response-emotion-badge">{{ emotionIcon }}</div>
                 </div>
@@ -162,66 +173,79 @@ function formatEffect(effect: any): string {
                 </div>
               </div>
               <div class="response-bubble">
-                <p class="response-text">{{ response.text }}</p>
+                <p class="response-text">{{ currentResponse.text }}</p>
                 <div class="bubble-tail"></div>
               </div>
+              <div class="progress-hint">
+                <div class="progress-dots">
+                  <span></span><span></span><span></span>
+                </div>
+              </div>
             </div>
-          </Transition>
 
-          <Transition name="result">
-            <div v-if="gameStore.showResult && result" class="result-section">
+            <div v-else-if="showResult && eventResult" key="result" class="result-section">
               <h3 class="result-title">✨ 结果</h3>
               
-              <div v-if="result.unlockedCard" class="result-card-unlock">
+              <div v-if="eventResult.unlockedCard" class="result-card-unlock">
                 <div class="card-reveal">
-                  <div class="card-inner" :style="{ borderColor: getRarityColor(result.unlockedCard.rarity) }">
-                    <span class="card-image">{{ result.unlockedCard.image }}</span>
-                    <span class="card-rarity" :style="{ color: getRarityColor(result.unlockedCard.rarity) }">{{ getRarityLabel(result.unlockedCard.rarity) }}</span>
-                    <span class="card-name">{{ result.unlockedCard.name }}</span>
+                  <div class="card-inner" :style="{ borderColor: getRarityColor(eventResult.unlockedCard.rarity) }">
+                    <span class="card-image">{{ eventResult.unlockedCard.image }}</span>
+                    <span class="card-rarity" :style="{ color: getRarityColor(eventResult.unlockedCard.rarity) }">{{ getRarityLabel(eventResult.unlockedCard.rarity) }}</span>
+                    <span class="card-name">{{ eventResult.unlockedCard.name }}</span>
                   </div>
                 </div>
                 <p class="card-unlock-text">🎴 获得新卡牌！</p>
               </div>
 
-              <div v-if="result.unlockedCharacter" class="result-character-unlock">
-                <p class="unlock-text">✨ 解锁新角色：{{ result.unlockedCharacter }}！</p>
+              <div v-if="eventResult.unlockedCharacter" class="result-character-unlock">
+                <p class="unlock-text">✨ 解锁新角色：{{ eventResult.unlockedCharacter }}！</p>
               </div>
 
               <div class="result-changes">
-                <TransitionGroup name="float" tag="div" class="changes-list">
+                <div v-if="eventResult.affinityChanges?.length" class="changes-group">
                   <div 
-                    v-for="(change, idx) in result.affinityChanges" 
+                    v-for="(change, idx) in eventResult.affinityChanges" 
                     :key="'aff-' + idx"
                     class="change-item affinity"
                     :class="{ positive: change.change > 0, negative: change.change < 0 }"
+                    :style="{ animationDelay: idx * 100 + 'ms' }"
                   >
                     <span class="change-icon">💕</span>
                     <span class="change-name">{{ change.name }}</span>
                     <span class="change-value">{{ change.change > 0 ? '+' : '' }}{{ change.change }}</span>
                     <span class="change-label">好感</span>
                   </div>
+                </div>
+
+                <div v-if="eventResult.moodChanges?.length" class="changes-group">
                   <div 
-                    v-for="(change, idx) in result.moodChanges" 
+                    v-for="(change, idx) in eventResult.moodChanges" 
                     :key="'mood-' + idx"
                     class="change-item mood"
                     :class="{ positive: change.change > 0, negative: change.change < 0 }"
+                    :style="{ animationDelay: (eventResult.affinityChanges?.length || 0) * 100 + idx * 100 + 'ms' }"
                   >
                     <span class="change-icon">😊</span>
                     <span class="change-name">{{ change.name }}</span>
                     <span class="change-value">{{ change.change > 0 ? '+' : '' }}{{ change.change }}</span>
                     <span class="change-label">心情</span>
                   </div>
+                </div>
+
+                <div 
+                  v-if="eventResult.resourceChange !== undefined" 
+                  class="changes-group"
+                >
                   <div 
-                    v-if="result.resourceChange !== undefined" 
-                    key="resource"
                     class="change-item resource"
-                    :class="{ positive: result.resourceChange > 0, negative: result.resourceChange < 0 }"
+                    :class="{ positive: eventResult.resourceChange > 0, negative: eventResult.resourceChange < 0 }"
+                    :style="{ animationDelay: ((eventResult.affinityChanges?.length || 0) + (eventResult.moodChanges?.length || 0)) * 100 + 'ms' }"
                   >
                     <span class="change-icon">💰</span>
                     <span class="change-name">代币</span>
-                    <span class="change-value">{{ result.resourceChange > 0 ? '+' : '' }}{{ result.resourceChange }}</span>
+                    <span class="change-value">{{ eventResult.resourceChange > 0 ? '+' : '' }}{{ eventResult.resourceChange }}</span>
                   </div>
-                </TransitionGroup>
+                </div>
               </div>
             </div>
           </Transition>
@@ -253,15 +277,29 @@ function formatEffect(effect: any): string {
   position: relative;
   z-index: 1;
   padding: 32px;
+  min-height: 300px;
+  display: flex;
+  flex-direction: column;
 }
 
 .event-main {
-  animation: fadeIn 0.5s ease-out;
+  display: flex;
+  flex-direction: column;
 }
 
-@keyframes fadeIn {
-  from { opacity: 0; transform: translateY(20px); }
-  to { opacity: 1; transform: translateY(0); }
+.fade-enter-active,
+.fade-leave-active {
+  transition: all 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.fade-enter-from {
+  opacity: 0;
+  transform: translateY(15px);
+}
+
+.fade-leave-to {
+  opacity: 0;
+  transform: translateY(-15px);
 }
 
 .event-header {
@@ -493,34 +531,12 @@ function formatEffect(effect: any): string {
   color: #fef3c7;
 }
 
-.response-enter-active,
-.response-leave-active {
-  transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.response-enter-from {
-  opacity: 0;
-  transform: scale(0.9) translateY(20px);
-}
-
-.response-leave-to {
-  opacity: 0;
-  transform: scale(1.1) translateY(-10px);
-}
-
 .response-section {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 24px;
-  padding: 20px 0;
-  animation: responseAppear 0.5s ease-out;
-}
-
-@keyframes responseAppear {
-  0% { opacity: 0; transform: scale(0.8); }
-  50% { transform: scale(1.05); }
-  100% { opacity: 1; transform: scale(1); }
+  padding: 10px 0;
 }
 
 .response-character {
@@ -541,7 +557,7 @@ function formatEffect(effect: any): string {
 .response-avatar.sad { animation: shakeSad 0.8s ease-in-out infinite; }
 .response-avatar.angry { animation: shakeAngry 0.5s ease-in-out infinite; }
 .response-avatar.shy { animation: shySway 1.2s ease-in-out infinite; }
-.response-avatar.surprised { animation: surprised 0.5s ease-in-out infinite; }
+.response-avatar.surprised { animation: surprisedAnim 0.5s ease-in-out infinite; }
 
 @keyframes bounce {
   0%, 100% { transform: translateY(0); }
@@ -574,7 +590,7 @@ function formatEffect(effect: any): string {
   50% { transform: translateX(-5px) rotate(-3deg); }
 }
 
-@keyframes surprised {
+@keyframes surprisedAnim {
   0%, 100% { transform: scale(1); }
   25% { transform: scale(1.1); }
   75% { transform: scale(0.95); }
@@ -645,13 +661,7 @@ function formatEffect(effect: any): string {
   padding: 24px 32px;
   border-radius: 24px;
   max-width: 100%;
-  animation: bubbleIn 0.5s ease-out 0.3s both;
   border: 2px solid var(--accent-primary);
-}
-
-@keyframes bubbleIn {
-  0% { opacity: 0; transform: translateY(10px); }
-  100% { opacity: 1; transform: translateY(0); }
 }
 
 .bubble-tail {
@@ -672,27 +682,40 @@ function formatEffect(effect: any): string {
   color: var(--text-primary);
   margin: 0;
   text-align: center;
-  animation: textReveal 2s ease-out;
 }
 
-@keyframes textReveal {
-  0% { opacity: 0; }
-  100% { opacity: 1; }
+.progress-hint {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding-top: 8px;
 }
 
-.result-enter-active,
-.result-leave-active {
-  transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+.progress-dots {
+  display: flex;
+  gap: 6px;
 }
 
-.result-enter-from {
-  opacity: 0;
-  transform: scale(0.9) translateY(20px);
+.progress-dots span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-primary);
+  opacity: 0.3;
+  animation: dotBounce 1.4s ease-in-out infinite;
 }
 
-.result-leave-to {
-  opacity: 0;
-  transform: scale(1.1);
+.progress-dots span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.progress-dots span:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes dotBounce {
+  0%, 80%, 100% { transform: scale(0.6); opacity: 0.3; }
+  40% { transform: scale(1); opacity: 1; }
 }
 
 .result-section {
@@ -700,7 +723,8 @@ function formatEffect(effect: any): string {
   flex-direction: column;
   align-items: center;
   gap: 24px;
-  padding: 20px 0;
+  padding: 10px 0;
+  width: 100%;
 }
 
 .result-title {
@@ -813,20 +837,15 @@ function formatEffect(effect: any): string {
   width: 100%;
 }
 
-.changes-list {
+.changes-group {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  width: 100%;
+  margin-bottom: 12px;
 }
 
-.float-enter-active {
-  transition: all 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
-}
-
-.float-enter-from {
-  opacity: 0;
-  transform: translateX(-30px);
+.changes-group:last-child {
+  margin-bottom: 0;
 }
 
 .change-item {
@@ -836,7 +855,8 @@ function formatEffect(effect: any): string {
   padding: 16px 20px;
   background: var(--bg-tertiary);
   border-radius: 12px;
-  animation: floatUp 0.6s ease-out;
+  opacity: 0;
+  animation: floatUp 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
 }
 
 @keyframes floatUp {
@@ -873,12 +893,12 @@ function formatEffect(effect: any): string {
 
 .change-item.positive .change-value {
   color: #22c55e;
-  animation: valuePop 0.5s ease-out;
+  animation: valuePop 0.5s ease-out 0.3s both;
 }
 
 .change-item.negative .change-value {
   color: #ef4444;
-  animation: valuePop 0.5s ease-out;
+  animation: valuePop 0.5s ease-out 0.3s both;
 }
 
 @keyframes valuePop {

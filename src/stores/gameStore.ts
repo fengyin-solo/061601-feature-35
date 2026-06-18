@@ -61,7 +61,41 @@ export const useGameStore = defineStore('game', () => {
     unlockedCard?: { id: string; name: string; rarity: string; image: string }
   } | null>(null)
   const showResult = ref(false)
+  const isEventFlowActive = ref(false)
+  const eventFlowPhase = ref<'idle' | 'choosing' | 'response' | 'result'>('idle')
   const darkMode = ref(false)
+
+  const eventTimers = new Set<number>()
+
+  function safeSetTimeout(callback: () => void, delay: number): number {
+    const timerId = window.setTimeout(() => {
+      eventTimers.delete(timerId)
+      try {
+        callback()
+      } catch (e) {
+        console.error('[EventTimer] callback error:', e)
+      }
+    }, delay) as unknown as number
+    eventTimers.add(timerId)
+    return timerId
+  }
+
+  function clearAllEventTimers() {
+    eventTimers.forEach(timerId => window.clearTimeout(timerId))
+    eventTimers.clear()
+  }
+
+  function resetEventFlowState() {
+    clearAllEventTimers()
+    currentEvent.value = null
+    showEventModal.value = false
+    currentResponse.value = null
+    showResponse.value = false
+    eventResult.value = null
+    showResult.value = false
+    isEventFlowActive.value = false
+    eventFlowPhase.value = 'idle'
+  }
 
   const characters = ref<CharacterState[]>(
     gameConfig.characters.map(c => ({
@@ -123,6 +157,7 @@ export const useGameStore = defineStore('game', () => {
   function rollbackToStep(stepIndex: number) {
     if (stepIndex < 0 || stepIndex >= history.value.length) return
     const snapshot = history.value[stepIndex]
+    resetEventFlowState()
     day.value = snapshot.day
     timeSlot.value = snapshot.timeSlot
     actionsRemaining.value = snapshot.actionsRemaining
@@ -332,7 +367,10 @@ export const useGameStore = defineStore('game', () => {
   }
 
   function checkAndTriggerEvent() {
+    if (isEventFlowActive.value) return
     if (currentEvent.value) return
+    if (showEventModal.value) return
+    if (showResponse.value || showResult.value) return
 
     const availableEvents = gameConfig.events.filter(event => {
       if (event.once && triggeredEvents.value.includes(event.id)) return false
@@ -365,13 +403,21 @@ export const useGameStore = defineStore('game', () => {
   }
 
   function triggerEvent(event: GameEventConfig) {
+    if (isEventFlowActive.value) return
+    resetEventFlowState()
+    isEventFlowActive.value = true
     currentEvent.value = event
     showEventModal.value = true
+    eventFlowPhase.value = 'choosing'
     triggeredEvents.value.push(event.id)
     addLog('event', `📖 触发事件：${event.title}`, event.characterId)
   }
 
   function handleEventChoice(choice: EventChoice) {
+    if (!isEventFlowActive.value) return
+    if (!currentEvent.value) return
+    if (eventFlowPhase.value !== 'choosing') return
+
     saveHistory()
 
     const affinityChanges: { characterId: string; change: number; name: string }[] = []
@@ -434,8 +480,34 @@ export const useGameStore = defineStore('game', () => {
     const hasResult = affinityChanges.length > 0 || moodChanges.length > 0 || 
                       choice.resourceChange !== undefined || unlockedCharacter || unlockedCard
 
+    const proceedToResult = () => {
+      if (!isEventFlowActive.value) return
+      showResponse.value = false
+      currentResponse.value = null
+
+      if (hasResult) {
+        eventResult.value = {
+          affinityChanges: affinityChanges.length > 0 ? affinityChanges : undefined,
+          moodChanges: moodChanges.length > 0 ? moodChanges : undefined,
+          resourceChange: choice.resourceChange,
+          unlockedCharacter,
+          unlockedCard
+        }
+        showResult.value = true
+        eventFlowPhase.value = 'result'
+
+        safeSetTimeout(() => {
+          if (!isEventFlowActive.value) return
+          showResult.value = false
+          eventResult.value = null
+          finishEventChoice(choice)
+        }, 2500)
+      } else {
+        finishEventChoice(choice)
+      }
+    }
+
     if (choice.responseText && currentEvent.value?.characterId) {
-      const charConfig = gameConfig.characters.find(c => c.id === currentEvent.value!.characterId)
       let emotion: EventResponse['emotion'] = 'neutral'
       const totalAffinity = affinityChanges.reduce((sum, a) => sum + a.change, 0)
       if (totalAffinity >= 10) emotion = 'happy'
@@ -450,29 +522,9 @@ export const useGameStore = defineStore('game', () => {
         emotion
       }
       showResponse.value = true
+      eventFlowPhase.value = 'response'
 
-      setTimeout(() => {
-        showResponse.value = false
-        if (hasResult) {
-          eventResult.value = {
-            affinityChanges: affinityChanges.length > 0 ? affinityChanges : undefined,
-            moodChanges: moodChanges.length > 0 ? moodChanges : undefined,
-            resourceChange: choice.resourceChange,
-            unlockedCharacter,
-            unlockedCard
-          }
-          showResult.value = true
-          setTimeout(() => {
-            showResult.value = false
-            eventResult.value = null
-            currentResponse.value = null
-            finishEventChoice(choice)
-          }, 2500)
-        } else {
-          currentResponse.value = null
-          finishEventChoice(choice)
-        }
-      }, 2500)
+      safeSetTimeout(proceedToResult, 2500)
     } else if (hasResult) {
       eventResult.value = {
         affinityChanges: affinityChanges.length > 0 ? affinityChanges : undefined,
@@ -482,7 +534,10 @@ export const useGameStore = defineStore('game', () => {
         unlockedCard
       }
       showResult.value = true
-      setTimeout(() => {
+      eventFlowPhase.value = 'result'
+
+      safeSetTimeout(() => {
+        if (!isEventFlowActive.value) return
         showResult.value = false
         eventResult.value = null
         finishEventChoice(choice)
@@ -493,13 +548,20 @@ export const useGameStore = defineStore('game', () => {
   }
 
   function finishEventChoice(choice: EventChoice) {
+    clearAllEventTimers()
+    showResponse.value = false
+    showResult.value = false
+    currentResponse.value = null
+    eventResult.value = null
     currentEvent.value = null
     showEventModal.value = false
+    isEventFlowActive.value = false
+    eventFlowPhase.value = 'idle'
 
     if (choice.nextEventId) {
       const nextEvent = gameConfig.events.find(e => e.id === choice.nextEventId)
       if (nextEvent) {
-        setTimeout(() => triggerEvent(nextEvent), 300)
+        safeSetTimeout(() => triggerEvent(nextEvent), 400)
       }
     }
   }
@@ -521,12 +583,7 @@ export const useGameStore = defineStore('game', () => {
     actionsRemaining.value = gameConfig.maxActionsPerDay
     resources.value = gameConfig.initialResources
     selectedCharacterId.value = null
-    currentEvent.value = null
-    showEventModal.value = false
-    currentResponse.value = null
-    showResponse.value = false
-    eventResult.value = null
-    showResult.value = false
+    resetEventFlowState()
 
     characters.value = gameConfig.characters.map(c => ({
       id: c.id,
@@ -574,6 +631,8 @@ export const useGameStore = defineStore('game', () => {
     showResponse,
     eventResult,
     showResult,
+    isEventFlowActive,
+    eventFlowPhase,
     darkMode,
     addLog,
     saveHistory,
