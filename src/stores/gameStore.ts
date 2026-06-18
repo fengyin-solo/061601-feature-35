@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import type { TimeOfDay, ActionType, GameEventConfig, EventChoice } from '../types/game'
+import type { TimeOfDay, ActionType, GameEventConfig, EventChoice, EventResponse } from '../types/game'
 import gameConfig from '../config/gameConfig'
 import {
   clamp,
@@ -51,6 +51,16 @@ export const useGameStore = defineStore('game', () => {
   const selectedCharacterId = ref<string | null>(null)
   const currentEvent = ref<GameEventConfig | null>(null)
   const showEventModal = ref(false)
+  const currentResponse = ref<EventResponse | null>(null)
+  const showResponse = ref(false)
+  const eventResult = ref<{
+    affinityChanges?: { characterId: string; change: number; name: string }[]
+    moodChanges?: { characterId: string; change: number; name: string }[]
+    resourceChange?: number
+    unlockedCharacter?: string
+    unlockedCard?: { id: string; name: string; rarity: string; image: string }
+  } | null>(null)
+  const showResult = ref(false)
   const darkMode = ref(false)
 
   const characters = ref<CharacterState[]>(
@@ -364,12 +374,28 @@ export const useGameStore = defineStore('game', () => {
   function handleEventChoice(choice: EventChoice) {
     saveHistory()
 
+    const affinityChanges: { characterId: string; change: number; name: string }[] = []
+    const moodChanges: { characterId: string; change: number; name: string }[] = []
+    let unlockedCharacter: string | undefined
+    let unlockedCard: { id: string; name: string; rarity: string; image: string } | undefined
+
     choice.effects.forEach(effect => {
+      const charConfig = gameConfig.characters.find(c => c.id === effect.characterId)
       if (effect.affinityChange !== undefined) {
         updateCharacterAffinity(effect.characterId, effect.affinityChange)
+        affinityChanges.push({
+          characterId: effect.characterId,
+          change: effect.affinityChange,
+          name: charConfig?.name || effect.characterId
+        })
       }
       if (effect.moodChange !== undefined) {
         updateCharacterMood(effect.characterId, effect.moodChange)
+        moodChanges.push({
+          characterId: effect.characterId,
+          change: effect.moodChange,
+          name: charConfig?.name || effect.characterId
+        })
       }
     })
 
@@ -382,7 +408,8 @@ export const useGameStore = defineStore('game', () => {
       if (char) {
         char.unlocked = true
         const charConfig = gameConfig.characters.find(c => c.id === choice.unlockCharacterId)
-        addLog('system', `✨ 解锁新角色：${charConfig?.name || choice.unlockCharacterId}`)
+        unlockedCharacter = charConfig?.name || choice.unlockCharacterId
+        addLog('system', `✨ 解锁新角色：${unlockedCharacter}`)
       }
     }
 
@@ -390,12 +417,82 @@ export const useGameStore = defineStore('game', () => {
       if (!collectedCards.value.includes(choice.addCardId)) {
         collectedCards.value.push(choice.addCardId)
         const card = gameConfig.cards.find(c => c.id === choice.addCardId)
-        addLog('system', `🎴 获得卡牌：${card?.name || choice.addCardId}`)
+        if (card) {
+          unlockedCard = {
+            id: card.id,
+            name: card.name,
+            rarity: card.rarity,
+            image: card.image
+          }
+          addLog('system', `🎴 获得卡牌：${card.name}`)
+        }
       }
     }
 
     addLog('story', `选择了：${choice.text}`)
 
+    const hasResult = affinityChanges.length > 0 || moodChanges.length > 0 || 
+                      choice.resourceChange !== undefined || unlockedCharacter || unlockedCard
+
+    if (choice.responseText && currentEvent.value?.characterId) {
+      const charConfig = gameConfig.characters.find(c => c.id === currentEvent.value!.characterId)
+      let emotion: EventResponse['emotion'] = 'neutral'
+      const totalAffinity = affinityChanges.reduce((sum, a) => sum + a.change, 0)
+      if (totalAffinity >= 10) emotion = 'happy'
+      else if (totalAffinity >= 5) emotion = 'shy'
+      else if (totalAffinity <= -10) emotion = 'angry'
+      else if (totalAffinity <= -5) emotion = 'sad'
+      else if (unlockedCharacter || unlockedCard) emotion = 'surprised'
+
+      currentResponse.value = {
+        characterId: currentEvent.value.characterId,
+        text: choice.responseText,
+        emotion
+      }
+      showResponse.value = true
+
+      setTimeout(() => {
+        showResponse.value = false
+        if (hasResult) {
+          eventResult.value = {
+            affinityChanges: affinityChanges.length > 0 ? affinityChanges : undefined,
+            moodChanges: moodChanges.length > 0 ? moodChanges : undefined,
+            resourceChange: choice.resourceChange,
+            unlockedCharacter,
+            unlockedCard
+          }
+          showResult.value = true
+          setTimeout(() => {
+            showResult.value = false
+            eventResult.value = null
+            currentResponse.value = null
+            finishEventChoice(choice)
+          }, 2500)
+        } else {
+          currentResponse.value = null
+          finishEventChoice(choice)
+        }
+      }, 2500)
+    } else if (hasResult) {
+      eventResult.value = {
+        affinityChanges: affinityChanges.length > 0 ? affinityChanges : undefined,
+        moodChanges: moodChanges.length > 0 ? moodChanges : undefined,
+        resourceChange: choice.resourceChange,
+        unlockedCharacter,
+        unlockedCard
+      }
+      showResult.value = true
+      setTimeout(() => {
+        showResult.value = false
+        eventResult.value = null
+        finishEventChoice(choice)
+      }, 2500)
+    } else {
+      finishEventChoice(choice)
+    }
+  }
+
+  function finishEventChoice(choice: EventChoice) {
     currentEvent.value = null
     showEventModal.value = false
 
@@ -426,6 +523,10 @@ export const useGameStore = defineStore('game', () => {
     selectedCharacterId.value = null
     currentEvent.value = null
     showEventModal.value = false
+    currentResponse.value = null
+    showResponse.value = false
+    eventResult.value = null
+    showResult.value = false
 
     characters.value = gameConfig.characters.map(c => ({
       id: c.id,
@@ -469,6 +570,10 @@ export const useGameStore = defineStore('game', () => {
     history,
     currentEvent,
     showEventModal,
+    currentResponse,
+    showResponse,
+    eventResult,
+    showResult,
     darkMode,
     addLog,
     saveHistory,

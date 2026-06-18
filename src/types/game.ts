@@ -43,6 +43,7 @@ export interface CardConfig {
 export interface EventChoice {
   id: string
   text: string
+  responseText?: string
   effects: {
     characterId: string
     affinityChange?: number
@@ -54,11 +55,19 @@ export interface EventChoice {
   addCardId?: string
 }
 
+export interface EventResponse {
+  characterId: string
+  text: string
+  emotion?: 'happy' | 'sad' | 'angry' | 'shy' | 'neutral' | 'surprised'
+}
+
 export interface GameEventConfig {
   id: string
   title: string
   description: string
   characterId?: string
+  narrationStyle?: 'normal' | 'dramatic' | 'romantic' | 'mysterious'
+  backgroundScene?: string
   triggerCondition: {
     minAffinity?: number
     maxAffinity?: number
